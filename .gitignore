@@ -10,3 +10,5 @@ venv/
 
 # Environment
 .env
+start_library.bat
+start_library - Shortcut.lnk

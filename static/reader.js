@@ -16,7 +16,9 @@ let readerState = {
   renderQueue: [],
   renderGeneration: 0,
   _handleMouseMove: null,
-  _handleMouseEnter: null
+  _handleMouseEnter: null,
+  _scrollRAF: null,
+  _autoSaveInterval: null
 };
 
 /**
@@ -107,10 +109,14 @@ function createReaderPanel() {
   `;
   document.body.appendChild(panel);
   
-  // Add scroll listener to track current page
+  // Add throttled scroll listener to track current page
   const viewport = document.getElementById('readerViewport');
   viewport.addEventListener('scroll', () => {
-    updateCurrentPageFromScroll();
+    if (readerState._scrollRAF) cancelAnimationFrame(readerState._scrollRAF);
+    readerState._scrollRAF = requestAnimationFrame(() => {
+      updateCurrentPageFromScroll();
+      readerState._scrollRAF = null;
+    });
   });
 }
 
@@ -200,20 +206,20 @@ async function renderAllPages(preserveScroll = false) {
   // Cancel if this render was superseded
   if (readerState.renderGeneration !== generation) return;
 
-  // Restore scroll position
+  // Wait for browser to finish layout after all DOM replacements
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
   const viewport = document.getElementById('readerViewport');
   if (preserveScroll && savedScrollTop > 0) {
-    // Restore exact scroll position after slight delay to ensure DOM is ready
-    await new Promise(resolve => setTimeout(resolve, 50));
     viewport.scrollTop = savedScrollTop;
   } else if (readerState.scrollOffset > 0) {
     viewport.scrollTop = readerState.scrollOffset;
+  } else if (readerState.currentPage > 1) {
+    const targetPage = container.querySelector(`[data-page="${readerState.currentPage}"]`);
+    if (targetPage) targetPage.scrollIntoView({ behavior: 'instant' });
   } else {
-    // Scroll to current page
     const firstPageElement = container.querySelector(`[data-page="1"]`);
-    if (firstPageElement) {
-      firstPageElement.scrollIntoView({ behavior: 'instant' });
-    }
+    if (firstPageElement) firstPageElement.scrollIntoView({ behavior: 'instant' });
   }
 }
 
@@ -435,6 +441,14 @@ function enterReadingMode() {
 
   viewport.addEventListener('mousemove', readerState._handleMouseMove);
   toolbar.addEventListener('mouseenter', readerState._handleMouseEnter);
+
+  // Autosave progress every 3 seconds
+  if (readerState._autoSaveInterval) clearInterval(readerState._autoSaveInterval);
+  readerState._autoSaveInterval = setInterval(() => {
+    if (readerState.currentFile && readerState.isReading) {
+      saveReadingProgress(readerState.currentFile, readerState.currentPage, readerState.scrollOffset);
+    }
+  }, 3000);
 }
 
 /**
@@ -443,10 +457,24 @@ function enterReadingMode() {
 function closeReader() {
   readerState.isOpen = false;
   readerState.isReading = false;
+  readerState.scrollOffset = 0;
+  readerState.currentPage = 1;
 
   // Save final reading progress
   if (readerState.currentFile) {
     saveReadingProgress(readerState.currentFile, readerState.currentPage, readerState.scrollOffset);
+  }
+
+  // Clear autosave interval
+  if (readerState._autoSaveInterval) {
+    clearInterval(readerState._autoSaveInterval);
+    readerState._autoSaveInterval = null;
+  }
+
+  // Clear pending scroll RAF
+  if (readerState._scrollRAF) {
+    cancelAnimationFrame(readerState._scrollRAF);
+    readerState._scrollRAF = null;
   }
 
   // Remove event listeners

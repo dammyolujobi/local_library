@@ -13,7 +13,10 @@ function loadSavedFolder() {
   if (saved) {
     document.getElementById('folderInput').value = saved;
     currentFolder = saved;
-    loadFiles();
+    loadFiles().then(() => {
+      const lastFile = localStorage.getItem('pdflib-last-file');
+      if (lastFile) openFile(lastFile);
+    });
   }
 }
 
@@ -200,6 +203,7 @@ async function performSearch() {
  * Open PDF file in reading panel
  */
 async function openFile(filePath) {
+  localStorage.setItem('pdflib-last-file', filePath);
   // Open in in-browser reading panel
   await openReader(filePath);
 }
