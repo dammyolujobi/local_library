@@ -13,9 +13,10 @@ let readerState = {
   zoomLevel: 100,
   displayMode: 'continuous',
   scrollOffset: 0,
-  pageDimensions: {},
   renderQueue: [],
-  isRendering: false
+  renderGeneration: 0,
+  _handleMouseMove: null,
+  _handleMouseEnter: null
 };
 
 /**
@@ -138,45 +139,74 @@ async function loadPdfDocument(filePath) {
 /**
  * Render all pages in continuous scroll mode
  */
-async function renderAllPages() {
+async function renderAllPages(preserveScroll = false) {
   if (!readerState.pdf) return;
+
+  // Save current scroll position if needed
+  let savedScrollTop = 0;
+  if (preserveScroll) {
+    const viewport = document.getElementById('readerViewport');
+    savedScrollTop = viewport.scrollTop;
+  }
 
   const container = document.getElementById('pagesContainer');
   container.innerHTML = '';
-  readerState.pageDimensions = {};
 
-  // Render all pages asynchronously with queue to avoid memory issues
+  // Clear render queue before starting
+  readerState.renderQueue = [];
+
+  // Track render generation to cancel stale renders
+  const generation = ++readerState.renderGeneration;
+
+  // Pre-insert placeholder wrappers to maintain DOM order
   for (let pageNum = 1; pageNum <= readerState.totalPages; pageNum++) {
+    const placeholder = document.createElement('div');
+    placeholder.setAttribute('data-page', pageNum);
+    placeholder.className = 'pdf-page';
+    placeholder.style.position = 'relative';
+    placeholder.style.backgroundColor = '#f0f0f0';
+    placeholder.style.minHeight = '400px';
+    container.appendChild(placeholder);
     readerState.renderQueue.push(pageNum);
   }
 
-  // Process render queue with max 2 concurrent renders
+  // Render all pages with semaphore-based concurrency
   const maxConcurrent = 2;
-  let activeRenders = 0;
+  let active = 0;
+  let resolveAll;
+  const done = new Promise(r => resolveAll = r);
+  const total = readerState.renderQueue.length;
+  let completed = 0;
 
-  while (readerState.renderQueue.length > 0 || activeRenders > 0) {
-    // Start new renders if we have capacity
-    while (activeRenders < maxConcurrent && readerState.renderQueue.length > 0) {
+  function runNext() {
+    while (active < maxConcurrent && readerState.renderQueue.length > 0) {
       const pageNum = readerState.renderQueue.shift();
-      activeRenders++;
-
-      renderPageToContainer(pageNum).then(() => {
-        activeRenders--;
-      }).catch(err => {
-        console.error(`Error rendering page ${pageNum}:`, err);
-        activeRenders--;
-      });
-    }
-
-    // Wait for at least one render to complete
-    if (activeRenders > 0) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      active++;
+      renderPageToContainer(pageNum)
+        .catch(err => console.error(`Error rendering page ${pageNum}:`, err))
+        .finally(() => {
+          active--;
+          completed++;
+          if (readerState.renderGeneration !== generation) return; // stale, abort
+          if (completed === total) resolveAll();
+          else runNext();
+        });
     }
   }
 
+  runNext();
+  await done;
+
+  // Cancel if this render was superseded
+  if (readerState.renderGeneration !== generation) return;
+
   // Restore scroll position
   const viewport = document.getElementById('readerViewport');
-  if (readerState.scrollOffset > 0) {
+  if (preserveScroll && savedScrollTop > 0) {
+    // Restore exact scroll position after slight delay to ensure DOM is ready
+    await new Promise(resolve => setTimeout(resolve, 50));
+    viewport.scrollTop = savedScrollTop;
+  } else if (readerState.scrollOffset > 0) {
     viewport.scrollTop = readerState.scrollOffset;
   } else {
     // Scroll to current page
@@ -262,15 +292,14 @@ async function renderPageToContainer(pageNum) {
     pageWrapper.appendChild(canvas);
     pageWrapper.appendChild(textLayer);
 
-    // Store dimensions for current page tracking
-    readerState.pageDimensions[pageNum] = {
-      offsetTop: pageWrapper.offsetTop,
-      height: viewport.height
-    };
-
-    // Add to container
+    // Replace placeholder with actual rendered page
     const container = document.getElementById('pagesContainer');
-    container.appendChild(pageWrapper);
+    const existing = container.querySelector(`[data-page="${pageNum}"]`);
+    if (existing) {
+      existing.replaceWith(pageWrapper);
+    } else {
+      container.appendChild(pageWrapper);
+    }
 
   } catch (err) {
     console.error(`Error rendering page ${pageNum}:`, err);
@@ -311,8 +340,8 @@ function updateCurrentPageFromScroll() {
  * Navigate to specific page
  */
 async function goToPage(pageNum) {
-  const viewport = document.getElementById('readerViewport');
-  const pageElement = document.querySelector(`[data-page="${pageNum}"]`);
+  const container = document.getElementById('pagesContainer');
+  const pageElement = container.querySelector(`[data-page="${pageNum}"]`);
   if (pageElement) {
     pageElement.scrollIntoView({ behavior: 'smooth' });
   }
@@ -342,7 +371,7 @@ async function nextPage() {
 async function zoomIn() {
   readerState.zoomLevel = Math.min(readerState.zoomLevel + 25, 400);
   updateZoomDisplay();
-  await renderAllPages();
+  await renderAllPages(true);
 }
 
 /**
@@ -351,7 +380,7 @@ async function zoomIn() {
 async function zoomOut() {
   readerState.zoomLevel = Math.max(readerState.zoomLevel - 25, 50);
   updateZoomDisplay();
-  await renderAllPages();
+  await renderAllPages(true);
 }
 
 /**
@@ -373,6 +402,8 @@ function setDisplayMode(mode) {
  * Enter reading mode (fade out main UI, show toolbar)
  */
 function enterReadingMode() {
+  if (readerState.isReading) return; // Prevent duplicate setup
+  
   readerState.isReading = true;
   const toolbar = document.querySelector('.reader-toolbar');
   const viewport = document.getElementById('readerViewport');
@@ -391,15 +422,19 @@ function enterReadingMode() {
     }, 5000);
   }
 
-  viewport.addEventListener('mousemove', () => {
+  // Store handlers on readerState for cleanup
+  readerState._handleMouseMove = () => {
     toolbar.classList.remove('hidden');
     resetHideTimer();
-  });
+  };
 
-  toolbar.addEventListener('mouseenter', () => {
+  readerState._handleMouseEnter = () => {
     clearTimeout(hideTimeout);
     toolbar.classList.remove('hidden');
-  });
+  };
+
+  viewport.addEventListener('mousemove', readerState._handleMouseMove);
+  toolbar.addEventListener('mouseenter', readerState._handleMouseEnter);
 }
 
 /**
@@ -412,6 +447,16 @@ function closeReader() {
   // Save final reading progress
   if (readerState.currentFile) {
     saveReadingProgress(readerState.currentFile, readerState.currentPage, readerState.scrollOffset);
+  }
+
+  // Remove event listeners
+  const viewport = document.getElementById('readerViewport');
+  const toolbar = document.querySelector('.reader-toolbar');
+  if (viewport && readerState._handleMouseMove) {
+    viewport.removeEventListener('mousemove', readerState._handleMouseMove);
+  }
+  if (toolbar && readerState._handleMouseEnter) {
+    toolbar.removeEventListener('mouseenter', readerState._handleMouseEnter);
   }
 
   // Hide reader
@@ -502,7 +547,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     readerState.zoomLevel = 100;
     updateZoomDisplay();
-    renderAllPages();
+    renderAllPages(true);
   }
 
   // Page Down or Right Arrow: next page
@@ -518,16 +563,4 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-/**
- * UPDATE: Modify openFile() to use reader instead of system open
- * This will be patched into app.js
- */
-const originalOpenFile = openFile;
-async function openFile(filePath) {
-  // Option 1: Open in reading panel (new behavior)
-  await openReader(filePath);
-
-  // Option 2: Keep system open as fallback
-  // Uncomment below to disable in-browser reading:
-  // await originalOpenFile(filePath);
-}
+// NOTE: openFile behavior is controlled in app.js, not here
