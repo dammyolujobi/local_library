@@ -26,7 +26,15 @@ let readerState = {
  */
 async function openReader(filePath) {
   try {
+    // If switching files, save progress of previous file first
+    if (readerState.currentFile && readerState.currentFile !== filePath && readerState.isOpen) {
+      saveReadingProgress(readerState.currentFile, readerState.currentPage, readerState.scrollOffset);
+    }
+
+    // Clear state for new file
     readerState.currentFile = filePath;
+    readerState.currentPage = 1;
+    readerState.scrollOffset = 0;
     readerState.isOpen = true;
 
     // Create/show reader panel
@@ -48,7 +56,9 @@ async function openReader(filePath) {
     const savedProgress = getReadingProgress(filePath);
     if (savedProgress) {
       readerState.currentPage = savedProgress.pageNumber || 1;
-      readerState.scrollOffset = savedProgress.scrollOffset || 0;
+      // Only restore scrollOffset if it's a valid position (page > 1)
+      // This prevents invalid pixel offsets from cross-PDF issues
+      readerState.scrollOffset = (savedProgress.pageNumber > 1) ? (savedProgress.scrollOffset || 0) : 0;
     } else {
       readerState.currentPage = 1;
       readerState.scrollOffset = 0;
@@ -206,20 +216,34 @@ async function renderAllPages(preserveScroll = false) {
   // Cancel if this render was superseded
   if (readerState.renderGeneration !== generation) return;
 
-  // Wait for browser to finish layout after all DOM replacements
-  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  // Wait longer for browser to finish layout after all DOM replacements
+  // Using multiple animation frames to ensure pages have painted their heights
+  await new Promise(resolve => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setTimeout(resolve, 50);
+      });
+    });
+  });
 
   const viewport = document.getElementById('readerViewport');
+  
+  // Always scroll to current page first
+  const targetPage = container.querySelector(`[data-page="${readerState.currentPage}"]`);
+  if (targetPage) {
+    targetPage.scrollIntoView({ behavior: 'instant' });
+  }
+
+  // Then apply exact scroll offset if we're preserving scroll from same session
   if (preserveScroll && savedScrollTop > 0) {
+    // Small delay to ensure scrollIntoView completed
+    await new Promise(resolve => setTimeout(resolve, 10));
     viewport.scrollTop = savedScrollTop;
-  } else if (readerState.scrollOffset > 0) {
+  } else if (readerState.scrollOffset > 0 && readerState.currentPage > 1) {
+    // Only apply scrollOffset if we have a meaningful page number (don't apply to page 1)
+    // This prevents cross-PDF offset issues
+    await new Promise(resolve => setTimeout(resolve, 10));
     viewport.scrollTop = readerState.scrollOffset;
-  } else if (readerState.currentPage > 1) {
-    const targetPage = container.querySelector(`[data-page="${readerState.currentPage}"]`);
-    if (targetPage) targetPage.scrollIntoView({ behavior: 'instant' });
-  } else {
-    const firstPageElement = container.querySelector(`[data-page="1"]`);
-    if (firstPageElement) firstPageElement.scrollIntoView({ behavior: 'instant' });
   }
 }
 
@@ -455,15 +479,15 @@ function enterReadingMode() {
  * Close reader panel
  */
 function closeReader() {
+  // Save final reading progress BEFORE resetting state
+  if (readerState.currentFile) {
+    saveReadingProgress(readerState.currentFile, readerState.currentPage, readerState.scrollOffset);
+  }
+
   readerState.isOpen = false;
   readerState.isReading = false;
   readerState.scrollOffset = 0;
   readerState.currentPage = 1;
-
-  // Save final reading progress
-  if (readerState.currentFile) {
-    saveReadingProgress(readerState.currentFile, readerState.currentPage, readerState.scrollOffset);
-  }
 
   // Clear autosave interval
   if (readerState._autoSaveInterval) {

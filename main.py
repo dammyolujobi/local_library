@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from router import library
+from router import music
 
 app = FastAPI(
     title="Local Library"
@@ -18,6 +19,7 @@ app.add_middleware(
 )
 
 app.include_router(library.router, prefix="/api")
+app.include_router(music.router,prefix="/api")
 
 # Serve static files
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

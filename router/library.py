@@ -1,12 +1,16 @@
 from fastapi import APIRouter,Depends
 from fastapi.responses import JSONResponse, FileResponse
-import os
+from utils.mongosetup import db
 from pathlib import Path
+from models.book import Book
+import os
+from router.music import model_classify
 
 router = APIRouter(
     tags=["Library"]
 )
 
+collection = db["books"]
 @router.get("/get_folder")
 async def get_folder(folder_name:str):
 
@@ -29,8 +33,22 @@ async def get_files(folder = Depends(get_folder)):
     for file in path.iterdir():
         if file.is_file() and file.suffix == ".pdf":
             files.append(file)
-
-    return files
+        
+    if collection.count_documents({}) is None or collection.count_documents({}) < len(files):
+        for file in files:
+            if collection.find_one({"name":file.name}):
+                continue
+            else:
+                genre = model_classify(str(file))
+                book = {
+                    "name":file.name,
+                    "path":str(file),
+                    "genre":genre
+                }
+                collection.insert_one(book)
+        return files
+    else:
+        return files
 
 @router.post("/search_files")
 async def search_files(search:str,folder = Depends(get_folder)):
@@ -65,4 +83,5 @@ async def get_pdf(file_path: str):
     if file_path and os.path.exists(file_path):
         return FileResponse(file_path, media_type="application/pdf")
     return JSONResponse({"error": "File not found"}, status_code=404)
+
 
