@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="A beautifully designed local PDF library browser">
-  <title>Local Library</title>
+  <title>The Library</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500&family=Cormorant+SC:wght@300;400;500&family=Lato:wght@300;400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
@@ -20,43 +20,55 @@
 
   <!-- Masthead -->
   <header class="masthead">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
-      <div style="flex:1">
-        <div class="masthead-rule">
-          <span>est. your collection</span>
-        </div>
-        <h1>The <em>Library</em></h1>
-        <p class="masthead-sub">Your documents, beautifully organised.</p>
-        <span class="ornament">✦ ✦ ✦</span>
-      </div>
-      <button class="btn btn-icon" onclick="openSettings()" title="Settings" style="margin-top:4px">
+    <div class="masthead-rule">
+      <span>est. your collection</span>
+    </div>
+    <h1>The <em>Library</em></h1>
+    <p class="masthead-sub">Your documents, beautifully organised.</p>
+    <span class="ornament">✦ ✦ ✦</span>
+
+    <!-- Icon buttons anchored to top-right of masthead -->
+    <div class="masthead-actions">
+      <button class="btn btn-icon" onclick="openSettings()" title="Settings">
         <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6"
             d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
         </svg>
       </button>
+      <button class="btn btn-icon" onclick="toggleMusicConfig()" title="Configure Music">
+        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M9 19V6l12-3v13M9 19a2 2 0 11-4 0 2 2 0 014 0zm12-3a2 2 0 11-4 0 2 2 0 014 0z"/>
+        </svg>
+      </button>
     </div>
   </header>
 
-  <!-- Search & Controls -->
-  <div class="controls" style="margin-bottom:16px">
-    <div class="search-row">
-      <div>
-        <div class="field-label">Search documents</div>
-        <div class="input-shell">
-          <input type="text" id="searchInput" placeholder="Begin your search…" onkeyup="handleSearch(event)" autocomplete="off">
-          <span class="input-icon">
-            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <circle cx="11" cy="11" r="8" stroke-width="1.8"/>
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M21 21l-4.35-4.35"/>
-            </svg>
-          </span>
-        </div>
-      </div>
-      <div style="padding-top:22px">
-        <button class="btn btn-primary" onclick="performSearch()">Search</button>
-      </div>
+  <!-- Search Bar -->
+  <div class="search-section">
+    <div class="field-label">Search documents</div>
+    <div class="search-bar">
+      <span class="search-icon">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <circle cx="11" cy="11" r="8" stroke-width="1.8"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M21 21l-4.35-4.35"/>
+        </svg>
+      </span>
+      <input type="text" id="searchInput" placeholder="Begin your search…" onkeyup="handleSearch(event)" autocomplete="off">
+      <button class="btn btn-primary search-submit" onclick="performSearch()">Search</button>
+    </div>
+  </div>
+
+  <!-- Music Folders Configuration -->
+  <div id="musicConfigSection" class="music-config" hidden>
+    <div class="music-config-header">
+      <h3>Configure Music by Genre</h3>
+      <button class="btn btn-ghost btn-sm" onclick="toggleMusicConfig()">Hide</button>
+    </div>
+    <div id="genreListMain" class="genre-grid"></div>
+    <div class="music-config-actions">
+      <button class="btn btn-primary" onclick="saveMusicSettings()">Save Music Folders</button>
+      <button class="btn btn-ghost" onclick="toggleMusicConfig()">Done</button>
     </div>
   </div>
 
@@ -72,12 +84,13 @@
 </div><!-- /page -->
 
 <!-- Settings Modal -->
-<div id="settingsModal" class="modal-overlay">
+<div id="settingsModal" class="modal-overlay" role="dialog" aria-modal="true" aria-label="Settings">
   <div class="modal">
     <div class="modal-header">
       <h2>Settings</h2>
-      <button class="modal-close" onclick="closeSettings()">&times;</button>
+      <button class="modal-close" onclick="closeSettings()" aria-label="Close">&times;</button>
     </div>
+
     <div class="field-label" style="margin-bottom:10px">Folder path</div>
     <div class="input-shell" style="margin-bottom:24px">
       <input type="text" id="folderInput" placeholder="Documents" value="Documents" autocomplete="off">
@@ -88,9 +101,9 @@
         </svg>
       </span>
     </div>
-    <div style="display:flex;gap:10px">
-      <button class="btn btn-primary" onclick="loadFiles();closeSettings()" style="flex:1">Load Library</button>
-      <button class="btn btn-ghost" onclick="clearAll();closeSettings()" style="flex:1">Clear</button>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="loadFiles();closeSettings()">Load Library</button>
+      <button class="btn btn-ghost" onclick="clearAll();closeSettings()">Clear</button>
     </div>
   </div>
 </div>

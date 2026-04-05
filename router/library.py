@@ -84,4 +84,37 @@ async def get_pdf(file_path: str):
         return FileResponse(file_path, media_type="application/pdf")
     return JSONResponse({"error": "File not found"}, status_code=404)
 
+@router.post("/update-page")
+async def update_page(data: dict):
+    """Update current page in database"""
+    try:
+        file_path = data.get("path", "")
+        page_num = data.get("page", 1)
+        
+        result = collection.update_one(
+            {"path": file_path},
+            {"$set": {"page": page_num}}
+        )
+        
+        if result.matched_count > 0:
+            return {"status": "ok", "message": "Page updated"}
+        else:
+            return JSONResponse({"error": "Book not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+@router.get("/get-page")
+async def get_page(file_path: str):
+    """Get last saved page for a book from database"""
+    try:
+        book = collection.find_one({"path": file_path})
+        if book:
+            return {"page": book.get("page", 1), "genre": book.get("genre", "unknown")}
+        else:
+            return JSONResponse({"error": "Book not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+
 

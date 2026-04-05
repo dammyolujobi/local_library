@@ -18,7 +18,11 @@ let readerState = {
   _handleMouseMove: null,
   _handleMouseEnter: null,
   _scrollRAF: null,
-  _autoSaveInterval: null
+  _autoSaveInterval: null,
+  bookGenre: 'unknown',
+  currentMusicIndex: 0,
+  musicFiles: [],
+  musicPlayer: null
 };
 
 /**
@@ -52,21 +56,28 @@ async function openReader(filePath) {
     // Hide main library UI
     document.querySelector('.page').classList.add('reading-mode-active');
 
-    // Load saved reading position
-    const savedProgress = getReadingProgress(filePath);
-    if (savedProgress) {
-      readerState.currentPage = savedProgress.pageNumber || 1;
-      // Only restore scrollOffset if it's a valid position (page > 1)
-      // This prevents invalid pixel offsets from cross-PDF issues
-      readerState.scrollOffset = (savedProgress.pageNumber > 1) ? (savedProgress.scrollOffset || 0) : 0;
-    } else {
+    // Load saved reading position and genre from database
+    try {
+      const response = await fetch(`/api/get-page?file_path=${encodeURIComponent(filePath)}`);
+      if (response.ok) {
+        const data = await response.json();
+        readerState.currentPage = data.page || 1;
+        readerState.bookGenre = data.genre || 'unknown';
+        readerState.scrollOffset = 0;
+      }
+    } catch (err) {
+      console.warn('Failed to load page from database:', err);
       readerState.currentPage = 1;
-      readerState.scrollOffset = 0;
+      readerState.bookGenre = 'unknown';
     }
 
     // Load and render PDF
     await loadPdfDocument(filePath);
     await renderAllPages();
+    
+    // Load and play music for the book genre
+    await loadMusicForGenre(readerState.bookGenre);
+    
     enterReadingMode();
 
   } catch (err) {
@@ -310,7 +321,7 @@ async function renderPageToContainer(pageNum) {
       span.style.position = 'absolute';
       span.style.fontSize = Math.round(item.height * baseScale) + 'px';
       span.style.left = Math.round(item.transform[4] * baseScale) + 'px';
-      span.style.top = Math.round((viewport.height / dpr) - (item.transform[5] * baseScale) - (item.height * baseScale)) + 'px';
+      span.style.top = Math.round(viewport.height - (item.transform[5] * baseScale) - (item.height * baseScale)) + 'px';
       span.style.fontFamily = item.fontName || 'serif';
       span.style.userSelect = 'text';
       span.style.color = 'transparent';
@@ -523,53 +534,35 @@ function closeReader() {
     readerState.pdf.destroy();
     readerState.pdf = null;
   }
+
+  // Stop music playback
+  if (readerState.musicPlayer) {
+    readerState.musicPlayer.pause();
+    readerState.musicPlayer.src = '';
+    readerState.musicPlayer = null;
+  }
+  readerState.musicFiles = [];
+  readerState.currentMusicIndex = 0;
 }
 
 /**
- * Save reading progress to localStorage
+ * Save reading progress to database
  */
 function saveReadingProgress(filePath, pageNumber, scrollOffset) {
-  const progress = {
-    filePath,
-    pageNumber,
-    scrollOffset,
-    timestamp: Date.now()
-  };
-
-  const key = `pdflib-progress-${encodeURIComponent(filePath)}`;
-  localStorage.setItem(key, JSON.stringify(progress));
+  // Save to database
+  fetch('/api/update-page', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      path: filePath,
+      page: pageNumber
+    })
+  }).catch(err => console.warn('Failed to save page to database:', err));
 }
 
-/**
- * Get saved reading progress from localStorage
- */
-function getReadingProgress(filePath) {
-  const key = `pdflib-progress-${encodeURIComponent(filePath)}`;
-  const saved = localStorage.getItem(key);
-  return saved ? JSON.parse(saved) : null;
-}
 
-/**
- * Clear reading progress for a file
- */
-function clearReadingProgress(filePath) {
-  const key = `pdflib-progress-${encodeURIComponent(filePath)}`;
-  localStorage.removeItem(key);
-}
-
-/**
- * Get all reading progress entries
- */
-function getAllReadingProgress() {
-  const all = {};
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key.startsWith('pdflib-progress-')) {
-      all[key] = JSON.parse(localStorage.getItem(key));
-    }
-  }
-  return all;
-}
 
 /**
  * Keyboard navigation for reader
@@ -614,5 +607,95 @@ document.addEventListener('keydown', (e) => {
     previousPage();
   }
 });
+
+/**
+ * Load and initialize music for a genre
+ */
+async function loadMusicForGenre(genre) {
+  try {
+    const response = await fetch(`/api/get-music-files?genre=${encodeURIComponent(genre)}`);
+    if (response.ok) {
+      const data = await response.json();
+      readerState.musicFiles = data.files || [];
+      readerState.currentMusicIndex = 0;
+
+      if (readerState.musicFiles.length > 0) {
+        console.log(`Loading music for genre: ${genre} (${readerState.musicFiles.length} files)`);
+        playMusicTrack(0);
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to load music files:', err);
+  }
+}
+
+/**
+ * Play a specific music track
+ */
+function playMusicTrack(index) {
+  if (index < 0 || index >= readerState.musicFiles.length) return;
+
+  readerState.currentMusicIndex = index;
+  const track = readerState.musicFiles[index];
+
+  // Destroy existing player if any
+  if (readerState.musicPlayer) {
+    readerState.musicPlayer.pause();
+    readerState.musicPlayer.src = '';
+    readerState.musicPlayer = null; // Clear player reference
+  }
+
+  // Create new audio element
+  readerState.musicPlayer = new Audio();
+  readerState.musicPlayer.volume = 0.3; // Start at 30% volume
+  readerState.musicPlayer.addEventListener('ended', () => {
+    playNextTrack();
+  });
+
+  // Set source and play
+  readerState.musicPlayer.src = `/api/music-file?path=${encodeURIComponent(track.path)}`;
+  readerState.musicPlayer.play().catch(err => {
+    console.warn('Failed to play music:', err);
+  });
+
+  console.log(`🎵 Now playing: ${track.name}`);
+}
+
+/**
+ * Play next music track
+ */
+function playNextTrack() {
+  const next = (readerState.currentMusicIndex + 1) % readerState.musicFiles.length;
+  playMusicTrack(next);
+}
+
+/**
+ * Play previous music track
+ */
+function playPreviousTrack() {
+  const prev = (readerState.currentMusicIndex - 1 + readerState.musicFiles.length) % readerState.musicFiles.length;
+  playMusicTrack(prev);
+}
+
+/**
+ * Toggle music playback
+ */
+function toggleMusicPlayback() {
+  if (!readerState.musicPlayer) return;
+  
+  if (readerState.musicPlayer.paused) {
+    readerState.musicPlayer.play();
+  } else {
+    readerState.musicPlayer.pause();
+  }
+}
+
+/**
+ * Set music volume (0-100)
+ */
+function setMusicVolume(percentage) {
+  if (!readerState.musicPlayer) return;
+  readerState.musicPlayer.volume = Math.max(0, Math.min(1, percentage / 100));
+}
 
 // NOTE: openFile behavior is controlled in app.js, not here
