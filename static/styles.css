@@ -1,5 +1,8 @@
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
+* {
+  scrollbar-color: transparent transparent;
+}
 :root {
   --paper:       #f7f3ec;
   --paper-warm:  #ede8df;

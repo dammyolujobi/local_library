@@ -122,6 +122,10 @@ function loadSavedFolder() {
   }
 }
 
+function normalizePath(p) {
+  return p.replace(/\\/g, '/');
+}
+
 /**
  * Fetch and display files from the configured folder.
  */
@@ -158,8 +162,9 @@ async function loadFiles() {
     const folderPath = folderData.Folder;
 
     allFiles = filesData.map(filePath => {
-      const parts = filePath.replace(/\\/g, '/').split('/');
-      return { name: parts[parts.length - 1], path: filePath };
+      const normalized = normalizePath(filePath);       // ← normalize here
+      const parts = normalized.split('/');
+      return { name: parts[parts.length - 1], path: normalized };
     });
 
     document.getElementById('searchInput').value = '';
@@ -171,6 +176,7 @@ async function loadFiles() {
     document.getElementById('fileList').innerHTML = '';
   }
 }
+
 
 // ─── THUMBNAIL RENDERING ─────────────────────────────────────────────────────
 
@@ -316,6 +322,7 @@ async function performSearch() {
 // ─── FILE OPEN ────────────────────────────────────────────────────────────────
 
 async function openFile(filePath) {
+  console.log('Raw path from allFiles:', JSON.stringify(filePath)); // ← add this
   localStorage.setItem('pdflib-last-file', filePath);
   await openReader(filePath);
 }

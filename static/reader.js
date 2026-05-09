@@ -29,34 +29,28 @@ let readerState = {
  * Open PDF in reading panel
  */
 async function openReader(filePath) {
+  filePath = normalizePath(filePath);                   // ← normalize on entry
+
   try {
-    // If switching files, save progress of previous file first
     if (readerState.currentFile && readerState.currentFile !== filePath && readerState.isOpen) {
       saveReadingProgress(readerState.currentFile, readerState.currentPage, readerState.scrollOffset);
     }
 
-    // Clear state for new file
     readerState.currentFile = filePath;
     readerState.currentPage = 1;
     readerState.scrollOffset = 0;
     readerState.isOpen = true;
 
-    // Create/show reader panel
     let panel = document.getElementById('readerPanel');
     if (!panel) {
       createReaderPanel();
       panel = document.getElementById('readerPanel');
     }
-    
-    // Small delay to ensure DOM is ready
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    panel.classList.add('active');
 
-    // Hide main library UI
+    await new Promise(resolve => setTimeout(resolve, 100));
+    panel.classList.add('active');
     document.querySelector('.page').classList.add('reading-mode-active');
 
-    // Load saved reading position and genre from database
     try {
       const response = await fetch(`/api/get-page?file_path=${encodeURIComponent(filePath)}`);
       if (response.ok) {
@@ -71,13 +65,9 @@ async function openReader(filePath) {
       readerState.bookGenre = 'unknown';
     }
 
-    // Load and render PDF
     await loadPdfDocument(filePath);
     await renderAllPages();
-    
-    // Load and play music for the book genre
     await loadMusicForGenre(readerState.bookGenre);
-    
     enterReadingMode();
 
   } catch (err) {
@@ -166,55 +156,73 @@ async function loadPdfDocument(filePath) {
 /**
  * Render all pages in continuous scroll mode
  */
+// Add this flag to readerState (in the initial readerState object at the top of reader.js)
+// isRendering: false,
+
+/**
+ * Render all pages in continuous scroll mode.
+ * Guards against concurrent calls with isRendering flag.
+ */
 async function renderAllPages(preserveScroll = false) {
   if (!readerState.pdf) return;
 
-  // Save current scroll position if needed
+  // If a render is already running, cancel it and wait for cleanup
+  if (readerState.isRendering) {
+    readerState.renderGeneration++;   // invalidates the running render
+    // Small wait to let the cancelled render exit its finally blocks
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  readerState.isRendering = true;
+
   let savedScrollTop = 0;
   if (preserveScroll) {
     const viewport = document.getElementById('readerViewport');
-    savedScrollTop = viewport.scrollTop;
+    savedScrollTop = viewport?.scrollTop ?? 0;
   }
 
   const container = document.getElementById('pagesContainer');
   container.innerHTML = '';
-
-  // Clear render queue before starting
   readerState.renderQueue = [];
 
-  // Track render generation to cancel stale renders
   const generation = ++readerState.renderGeneration;
 
-  // Pre-insert placeholder wrappers to maintain DOM order
+  // Pre-insert placeholders
   for (let pageNum = 1; pageNum <= readerState.totalPages; pageNum++) {
     const placeholder = document.createElement('div');
     placeholder.setAttribute('data-page', pageNum);
     placeholder.className = 'pdf-page';
-    placeholder.style.position = 'relative';
-    placeholder.style.backgroundColor = '#f0f0f0';
-    placeholder.style.minHeight = '400px';
+    placeholder.style.cssText = 'position:relative;background:#f0f0f0;min-height:400px;';
     container.appendChild(placeholder);
     readerState.renderQueue.push(pageNum);
   }
 
-  // Render all pages with semaphore-based concurrency
+  // Semaphore-based concurrent rendering
   const maxConcurrent = 2;
-  let active = 0;
+  let active = 0, completed = 0;
+  const total = readerState.renderQueue.length;
   let resolveAll;
   const done = new Promise(r => resolveAll = r);
-  const total = readerState.renderQueue.length;
-  let completed = 0;
 
   function runNext() {
     while (active < maxConcurrent && readerState.renderQueue.length > 0) {
       const pageNum = readerState.renderQueue.shift();
       active++;
       renderPageToContainer(pageNum)
-        .catch(err => console.error(`Error rendering page ${pageNum}:`, err))
+        .catch(err => {
+          // Silence cancellation errors — they are expected when generation changes
+          if (err?.name !== 'RenderingCancelledException') {
+            console.error(`Error rendering page ${pageNum}:`, err);
+          }
+        })
         .finally(() => {
           active--;
           completed++;
-          if (readerState.renderGeneration !== generation) return; // stale, abort
+          if (readerState.renderGeneration !== generation) {
+            // This render was superseded — bail out silently
+            if (active === 0) readerState.isRendering = false;
+            return;
+          }
           if (completed === total) resolveAll();
           else runNext();
         });
@@ -224,38 +232,30 @@ async function renderAllPages(preserveScroll = false) {
   runNext();
   await done;
 
-  // Cancel if this render was superseded
-  if (readerState.renderGeneration !== generation) return;
+  // Bail if superseded
+  if (readerState.renderGeneration !== generation) {
+    readerState.isRendering = false;
+    return;
+  }
 
-  // Wait longer for browser to finish layout after all DOM replacements
-  // Using multiple animation frames to ensure pages have painted their heights
+  // Wait for layout to settle
   await new Promise(resolve => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        setTimeout(resolve, 50);
-      });
-    });
+    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50)));
   });
 
   const viewport = document.getElementById('readerViewport');
-  
-  // Always scroll to current page first
   const targetPage = container.querySelector(`[data-page="${readerState.currentPage}"]`);
-  if (targetPage) {
-    targetPage.scrollIntoView({ behavior: 'instant' });
-  }
+  if (targetPage) targetPage.scrollIntoView({ behavior: 'instant' });
 
-  // Then apply exact scroll offset if we're preserving scroll from same session
   if (preserveScroll && savedScrollTop > 0) {
-    // Small delay to ensure scrollIntoView completed
     await new Promise(resolve => setTimeout(resolve, 10));
     viewport.scrollTop = savedScrollTop;
   } else if (readerState.scrollOffset > 0 && readerState.currentPage > 1) {
-    // Only apply scrollOffset if we have a meaningful page number (don't apply to page 1)
-    // This prevents cross-PDF offset issues
     await new Promise(resolve => setTimeout(resolve, 10));
     viewport.scrollTop = readerState.scrollOffset;
   }
+
+  readerState.isRendering = false;
 }
 
 /**

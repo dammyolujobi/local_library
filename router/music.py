@@ -2,7 +2,7 @@ from fastapi import APIRouter,Depends
 import fitz
 from ollama import Client
 import os
-from utils.mongosetup import db
+from utils.mongo_setup import db
 from fastapi.responses import JSONResponse, FileResponse
 from dotenv import load_dotenv
 
